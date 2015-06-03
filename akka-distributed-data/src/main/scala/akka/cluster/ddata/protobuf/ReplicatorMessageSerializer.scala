@@ -4,11 +4,9 @@
 package akka.cluster.ddata.protobuf
 
 import java.util.concurrent.TimeUnit
-
 import scala.collection.JavaConverters._
 import scala.collection.breakOut
 import scala.concurrent.duration.Duration
-
 import akka.actor.ExtendedActorSystem
 import akka.cluster.Member
 import akka.cluster.UniqueAddress
@@ -18,34 +16,66 @@ import akka.cluster.ddata.Replicator._
 import akka.cluster.ddata.Replicator.Internal._
 import akka.cluster.ddata.protobuf.msg.{ ReplicatorMessages ⇒ dm }
 import akka.serialization.Serialization
-import akka.serialization.Serializer
+import akka.serialization.SerializerWithStringManifest
+import akka.serialization.BaseSerializer
 import akka.util.{ ByteString ⇒ AkkaByteString }
 import com.google.protobuf.ByteString
 
 /**
  * Protobuf serializer of ReplicatorMessage messages.
  */
-class ReplicatorMessageSerializer(val system: ExtendedActorSystem) extends Serializer with SerializationSupport {
+class ReplicatorMessageSerializer(val system: ExtendedActorSystem)
+  extends SerializerWithStringManifest with SerializationSupport with BaseSerializer {
 
-  override def includeManifest: Boolean = true
+  val GetManifest = "A"
+  val GetSuccessManifest = "B"
+  val NotFoundManifest = "C"
+  val GetFailureManifest = "D"
+  val SubscribeManifest = "E"
+  val UnsubscribeManifest = "F"
+  val ChangedManifest = "G"
+  val DataEnvelopeManifest = "H"
+  val WriteManifest = "I"
+  val WriteAckManifest = "J"
+  val ReadManifest = "K"
+  val ReadResultManifest = "L"
+  val StatusManifest = "M"
+  val GossipManifest = "N"
 
-  override def identifier = 99901
+  private val fromBinaryMap = collection.immutable.HashMap[String, Array[Byte] ⇒ AnyRef](
+    GetManifest -> getFromBinary,
+    GetSuccessManifest -> getSuccessFromBinary,
+    NotFoundManifest -> notFoundFromBinary,
+    GetFailureManifest -> getFailureFromBinary,
+    SubscribeManifest -> subscribeFromBinary,
+    UnsubscribeManifest -> unsubscribeFromBinary,
+    ChangedManifest -> changedFromBinary,
+    DataEnvelopeManifest -> dataEnvelopeFromBinary,
+    WriteManifest -> writeFromBinary,
+    WriteAckManifest -> (_ ⇒ WriteAck),
+    ReadManifest -> readFromBinary,
+    ReadResultManifest -> readResultFromBinary,
+    StatusManifest -> statusFromBinary,
+    GossipManifest -> gossipFromBinary)
 
-  private val fromBinaryMap = collection.immutable.HashMap[Class[_ <: ReplicatorMessage], Array[Byte] ⇒ AnyRef](
-    classOf[Get] -> getFromBinary,
-    classOf[GetSuccess] -> getSuccessFromBinary,
-    classOf[NotFound] -> notFoundFromBinary,
-    classOf[GetFailure] -> getFailureFromBinary,
-    classOf[Subscribe] -> subscribeFromBinary,
-    classOf[Unsubscribe] -> unsubscribeFromBinary,
-    classOf[Changed] -> changedFromBinary,
-    classOf[DataEnvelope] -> dataEnvelopeFromBinary,
-    classOf[Write] -> writeFromBinary,
-    WriteAck.getClass -> (_ ⇒ WriteAck),
-    classOf[Read] -> readFromBinary,
-    classOf[ReadResult] -> readResultFromBinary,
-    classOf[Status] -> statusFromBinary,
-    classOf[Gossip] -> gossipFromBinary)
+  override def manifest(obj: AnyRef): String = obj match {
+    case _: DataEnvelope ⇒ DataEnvelopeManifest
+    case _: Write        ⇒ WriteManifest
+    case WriteAck        ⇒ WriteAckManifest
+    case _: Read         ⇒ ReadManifest
+    case _: ReadResult   ⇒ ReadResultManifest
+    case _: Status       ⇒ StatusManifest
+    case _: Get          ⇒ GetManifest
+    case _: GetSuccess   ⇒ GetSuccessManifest
+    case _: Changed      ⇒ ChangedManifest
+    case _: NotFound     ⇒ NotFoundManifest
+    case _: GetFailure   ⇒ GetFailureManifest
+    case _: Subscribe    ⇒ SubscribeManifest
+    case _: Unsubscribe  ⇒ UnsubscribeManifest
+    case _: Gossip       ⇒ GossipManifest
+    case _ ⇒
+      throw new IllegalArgumentException(s"Can't serialize object of type ${obj.getClass} in [${getClass.getName}]")
+  }
 
   def toBinary(obj: AnyRef): Array[Byte] = obj match {
     case m: DataEnvelope ⇒ dataEnvelopeToProto(m).toByteArray
@@ -63,18 +93,15 @@ class ReplicatorMessageSerializer(val system: ExtendedActorSystem) extends Seria
     case m: Unsubscribe  ⇒ unsubscribeToProto(m).toByteArray
     case m: Gossip       ⇒ compress(gossipToProto(m))
     case _ ⇒
-      throw new IllegalArgumentException(s"Can't serialize object of type ${obj.getClass}")
+      throw new IllegalArgumentException(s"Can't serialize object of type ${obj.getClass} in [${getClass.getName}]")
   }
 
-  def fromBinary(bytes: Array[Byte], clazz: Option[Class[_]]): AnyRef = clazz match {
-    case Some(c) ⇒ fromBinaryMap.get(c.asInstanceOf[Class[ReplicatorMessage]]) match {
+  override def fromBinary(bytes: Array[Byte], manifest: String): AnyRef =
+    fromBinaryMap.get(manifest) match {
       case Some(f) ⇒ f(bytes)
       case None ⇒ throw new IllegalArgumentException(
-        s"Unimplemented deserialization of message class $c in ReplicatorMessageSerializer")
+        s"Unimplemented deserialization of message with manifest [$manifest] in [${getClass.getName}]")
     }
-    case _ ⇒ throw new IllegalArgumentException(
-      "Need a message class to be able to deserialize bytes in ReplicatorMessageSerializer")
-  }
 
   private def statusToProto(status: Status): dm.Status = {
     val b = dm.Status.newBuilder()

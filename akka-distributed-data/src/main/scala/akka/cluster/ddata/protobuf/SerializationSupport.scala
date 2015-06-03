@@ -7,9 +7,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
-
 import scala.annotation.tailrec
-
 import akka.actor.ActorRef
 import akka.actor.Address
 import akka.actor.ExtendedActorSystem
@@ -20,6 +18,7 @@ import akka.serialization.Serialization
 import akka.serialization.SerializationExtension
 import com.google.protobuf.ByteString
 import com.google.protobuf.MessageLite
+import akka.serialization.SerializerWithStringManifest
 
 /**
  * Some useful serialization helper methods.
@@ -103,8 +102,17 @@ trait SerializationSupport {
       val builder = dm.OtherMessage.newBuilder().
         setEnclosedMessage(ByteString.copyFrom(msgSerializer.toBinary(m)))
         .setSerializerId(msgSerializer.identifier)
-      if (msgSerializer.includeManifest)
-        builder.setMessageManifest(ByteString.copyFromUtf8(m.getClass.getName))
+
+      msgSerializer match {
+        case ser2: SerializerWithStringManifest ⇒
+          val manifest = ser2.manifest(m)
+          if (manifest != "")
+            builder.setMessageManifest(ByteString.copyFromUtf8(manifest))
+        case _ ⇒
+          if (msgSerializer.includeManifest)
+            builder.setMessageManifest(ByteString.copyFromUtf8(m.getClass.getName))
+      }
+
       builder.build()
     }
 
@@ -121,11 +129,11 @@ trait SerializationSupport {
     otherMessageFromProto(dm.OtherMessage.parseFrom(bytes))
 
   def otherMessageFromProto(other: dm.OtherMessage): AnyRef = {
+    val manifest = if (other.hasMessageManifest) other.getMessageManifest.toStringUtf8 else ""
     serialization.deserialize(
       other.getEnclosedMessage.toByteArray,
       other.getSerializerId,
-      if (other.hasMessageManifest)
-        Some(system.dynamicAccess.getClassFor[AnyRef](other.getMessageManifest.toStringUtf8).get) else None).get
+      manifest).get
   }
 
 }

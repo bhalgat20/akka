@@ -45,7 +45,7 @@ class ReplicatedDataSerializerSpec extends TestKit(ActorSystem("ReplicatedDataSe
 
   def checkSerialization(obj: AnyRef): Unit = {
     val blob = serializer.toBinary(obj)
-    val ref = serializer.fromBinary(blob, obj.getClass)
+    val ref = serializer.fromBinary(blob, serializer.manifest(obj))
     ref should be(obj)
   }
 

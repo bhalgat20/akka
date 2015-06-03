@@ -27,31 +27,59 @@ import akka.cluster.ddata.Replicator.Internal._
 import akka.cluster.ddata.VersionVector
 import akka.cluster.ddata.protobuf.msg.{ ReplicatedDataMessages ⇒ rd }
 import akka.cluster.ddata.protobuf.msg.{ ReplicatorMessages ⇒ dm }
-import akka.serialization.Serializer
+import akka.serialization.SerializerWithStringManifest
+import akka.serialization.BaseSerializer
 import com.google.protobuf.ByteString
 
 /**
  * Protobuf serializer of ReplicatedData.
  */
-class ReplicatedDataSerializer(val system: ExtendedActorSystem) extends Serializer with SerializationSupport {
+class ReplicatedDataSerializer(val system: ExtendedActorSystem)
+  extends SerializerWithStringManifest with SerializationSupport with BaseSerializer {
 
-  override def includeManifest: Boolean = true
+  private val DeletedDataManifest = "A"
+  private val GSetManifest = "B"
+  private val ORSetManifest = "C"
+  private val FlagManifest = "D"
+  private val LWWRegisterManifest = "E"
+  private val GCounterManifest = "F"
+  private val PNCounterManifest = "G"
+  private val ORMapManifest = "H"
+  private val LWWMapManifest = "I"
+  private val PNCounterMapManifest = "J"
+  private val ORMultiMapManifest = "K"
+  private val VersionVectorManifest = "L"
 
-  override def identifier = 99902
+  private val fromBinaryMap = collection.immutable.HashMap[String, Array[Byte] ⇒ AnyRef](
+    GSetManifest -> gsetFromBinary,
+    ORSetManifest -> orsetFromBinary,
+    FlagManifest -> flagFromBinary,
+    LWWRegisterManifest -> lwwRegisterFromBinary,
+    GCounterManifest -> gcounterFromBinary,
+    PNCounterManifest -> pncounterFromBinary,
+    ORMapManifest -> ormapFromBinary,
+    LWWMapManifest -> lwwmapFromBinary,
+    PNCounterMapManifest -> pncountermapFromBinary,
+    ORMultiMapManifest -> multimapFromBinary,
+    DeletedDataManifest -> (_ ⇒ DeletedData),
+    VersionVectorManifest -> versionVectorFromBinary)
 
-  private val fromBinaryMap = collection.immutable.HashMap[Class[_ <: ReplicatedData], Array[Byte] ⇒ AnyRef](
-    classOf[GSet[_]] -> gsetFromBinary,
-    classOf[ORSet[_]] -> orsetFromBinary,
-    classOf[Flag] -> flagFromBinary,
-    classOf[LWWRegister[_]] -> lwwRegisterFromBinary,
-    classOf[GCounter] -> gcounterFromBinary,
-    classOf[PNCounter] -> pncounterFromBinary,
-    classOf[ORMap[_]] -> ormapFromBinary,
-    classOf[LWWMap[_]] -> lwwmapFromBinary,
-    classOf[PNCounterMap] -> pncountermapFromBinary,
-    classOf[ORMultiMap[_]] -> multimapFromBinary,
-    DeletedData.getClass -> (_ ⇒ DeletedData),
-    classOf[VersionVector] -> versionVectorFromBinary)
+  override def manifest(obj: AnyRef): String = obj match {
+    case _: ORSet[_]       ⇒ ORSetManifest
+    case _: GSet[_]        ⇒ GSetManifest
+    case _: GCounter       ⇒ GCounterManifest
+    case _: PNCounter      ⇒ PNCounterManifest
+    case _: Flag           ⇒ FlagManifest
+    case _: LWWRegister[_] ⇒ LWWRegisterManifest
+    case _: ORMap[_]       ⇒ ORMapManifest
+    case _: LWWMap[_]      ⇒ LWWMapManifest
+    case _: PNCounterMap   ⇒ PNCounterMapManifest
+    case _: ORMultiMap[_]  ⇒ ORMultiMapManifest
+    case DeletedData       ⇒ DeletedDataManifest
+    case _: VersionVector  ⇒ VersionVectorManifest
+    case _ ⇒
+      throw new IllegalArgumentException(s"Can't serialize object of type ${obj.getClass} in [${getClass.getName}]")
+  }
 
   def toBinary(obj: AnyRef): Array[Byte] = obj match {
     case m: ORSet[_]       ⇒ compress(orsetToProto(m))
@@ -67,18 +95,15 @@ class ReplicatedDataSerializer(val system: ExtendedActorSystem) extends Serializ
     case DeletedData       ⇒ dm.Empty.getDefaultInstance.toByteArray
     case m: VersionVector  ⇒ versionVectorToProto(m).toByteArray
     case _ ⇒
-      throw new IllegalArgumentException(s"Can't serialize object of type ${obj.getClass}")
+      throw new IllegalArgumentException(s"Can't serialize object of type ${obj.getClass} in [${getClass.getName}]")
   }
 
-  def fromBinary(bytes: Array[Byte], clazz: Option[Class[_]]): AnyRef = clazz match {
-    case Some(c) ⇒ fromBinaryMap.get(c.asInstanceOf[Class[ReplicatedData]]) match {
+  override def fromBinary(bytes: Array[Byte], manifest: String): AnyRef =
+    fromBinaryMap.get(manifest) match {
       case Some(f) ⇒ f(bytes)
       case None ⇒ throw new IllegalArgumentException(
-        s"Unimplemented deserialization of message class $c in ReplicatedDataSerializer")
+        s"Unimplemented deserialization of message with manifest [$manifest] in [${getClass.getName}]")
     }
-    case _ ⇒ throw new IllegalArgumentException(
-      "Need a message class to be able to deserialize bytes in ReplicatedDataSerializer")
-  }
 
   def gsetToProto(gset: GSet[_]): rd.GSet = {
     val b = rd.GSet.newBuilder()
