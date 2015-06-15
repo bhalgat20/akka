@@ -89,8 +89,9 @@ object ClusterClientSettings {
  *   within the duration `heartbeatInterval + acceptableHeartbeatPause`.
  * @param bufferSize If connection to the receptionist is not established the client
  *   will buffer this number of messages and deliver them the connection is established.
- *   When the buffer is full new messages will be dropped. Use 0 to disable buffering,
- *   i.e. messages will be dropped immediately if the location of the singleton is unknown.
+ *   When the buffer is full old messages will be dropped when new messages are sent via the
+ *   client. Use 0 to disable buffering, i.e. messages will be dropped immediately if the
+ *   location of the receptionist is unavailable.
  */
 final class ClusterClientSettings(
   val initialContacts: Set[ActorPath],
@@ -99,6 +100,8 @@ final class ClusterClientSettings(
   val heartbeatInterval: FiniteDuration,
   val acceptableHeartbeatPause: FiniteDuration,
   val bufferSize: Int) extends NoSerializationVerificationNeeded {
+
+  require(bufferSize >= 0 && bufferSize <= 10000, "bufferSize must be >= 0 and <= 10000")
 
   def withInitialContacts(initialContacts: Set[ActorPath]): ClusterClientSettings = {
     require(initialContacts.nonEmpty, "initialContacts must be defined")
@@ -189,6 +192,15 @@ object ClusterClient {
  *
  *  Use the factory method [[ClusterClient#props]]) to create the
  * [[akka.actor.Props]] for the actor.
+ *
+ * If the receptionist is not currently available, the client will buffer the messages
+ * and then deliver them when the connection to the receptionist has been established.
+ * The size of the buffer is configurable and it can be disabled by using a buffer size
+ * of 0. When the buffer is full old messages will be dropped when new messages are sent
+ * via the client.
+ *
+ * Note that this is a best effort implementation: messages can always be lost due to the distributed
+ * nature of the actors involved.
  */
 final class ClusterClient(settings: ClusterClientSettings) extends Actor with ActorLogging {
 
@@ -213,7 +225,7 @@ final class ClusterClient(settings: ClusterClientSettings) extends Actor with Ac
   scheduleRefreshContactsTick(establishingGetContactsInterval)
   self ! RefreshContactsTick
 
-  var buffer = Vector.empty[(Any, ActorRef)]
+  val buffer = new java.util.LinkedList[(Any, ActorRef)]
 
   def scheduleRefreshContactsTick(interval: FiniteDuration): Unit = {
     refreshContactsTask foreach { _.cancel() }
@@ -287,19 +299,23 @@ final class ClusterClient(settings: ClusterClientSettings) extends Actor with Ac
   }
 
   def buffer(msg: Any): Unit =
-    if (buffer.size == settings.bufferSize) {
-      log.debug("Receptionist not available, buffer is full, dropping message type [{}]", msg.getClass.getName)
+    if (settings.bufferSize == 0)
+      log.debug("Receptionist not available and buffering is disabled, dropping message [{}]", msg.getClass.getName)
+    else if (buffer.size == settings.bufferSize) {
+      val (m, _) = buffer.removeFirst()
+      log.debug("Receptionist not available, buffer is full, dropping first message [{}]", m.getClass.getName)
+      buffer.addLast((msg, sender()))
     } else {
       log.debug("Receptionist not available, buffering message type [{}]", msg.getClass.getName)
-      buffer :+= ((msg, sender()))
+      buffer.addLast((msg, sender()))
     }
 
   def sendBuffered(receptionist: ActorRef): Unit = {
     log.debug("Sending buffered messages to receptionist")
-    buffer.foreach {
-      case (msg, snd) ⇒ receptionist.tell(msg, snd)
+    while (!buffer.isEmpty) {
+      val (msg, snd) = buffer.removeFirst()
+      receptionist.tell(msg, snd)
     }
-    buffer = Vector.empty
   }
 }
 
@@ -511,13 +527,6 @@ object ClusterReceptionist {
  * as the original sender, so the client can choose to send subsequent messages
  * directly to the actor in the cluster.
  *
- * If the receptionist is not currently available, the client will buffer the messages
- * and then deliver them when the connection to the receptionist has been established.
- * The size of the buffer is configurable and it can be disabled by using a buffer size
- * of 0.
- *
- * Note that this is a best effort implementation: messages can always be lost due to the distributed
- * nature of the actors involved.
  */
 final class ClusterReceptionist(pubSubMediator: ActorRef, settings: ClusterReceptionistSettings)
   extends Actor with ActorLogging {

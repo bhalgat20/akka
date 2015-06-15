@@ -54,8 +54,8 @@ directly to the actor in the cluster.
 
 While establishing a connection to a receptionist the ``ClusterClient`` will buffer
 messages and send them when the connection is established. If the buffer is full
-the ``ClusterClient`` will drop the messages. The size of the buffer is configurable
-and it can be disabled by using a buffer size of 0.
+the ``ClusterClient`` will drop old messages when new messages are sent via the client.
+The size of the buffer is configurable and it can be disabled by using a buffer size of 0.
 
 It's worth noting that messages can always be lost because of the distributed nature
 of these actors. As always, additional logic should be implemented in the destination
