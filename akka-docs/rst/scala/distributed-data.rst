@@ -183,10 +183,7 @@ or ``ORMap``. If an entry is added to an ``ORSet`` or ``ORMap`` from one node an
 node the entry will only be removed if the added entry is visible on the node where the removal is
 performed (hence the name observed-removed set).
 
-The following example illustrates how to do that. It also illustrates how incoming commands
-are stashed to retain the order of the operations. The stashing is only needed if the order
-of the operations are important. In this case we do not want a subsequent ``AddItem`` to overtake
-a preceding ``RemoveItem``.
+The following example illustrates how to do that:
 
 .. includecode:: ../../../akka-distributed-data/src/multi-jvm/scala/sample/distributeddata/ReplicatedShoppingCartSpec.scala#remove-item 
 

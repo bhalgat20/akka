@@ -7,7 +7,6 @@ import scala.concurrent.duration._
 import akka.actor.Actor
 import akka.actor.ActorRef
 import akka.actor.Props
-import akka.actor.Stash
 import akka.cluster.Cluster
 import akka.cluster.ddata.DistributedData
 import akka.cluster.ddata.LWWMap
@@ -54,7 +53,7 @@ object ShoppingCart {
 
 }
 
-class ShoppingCart(userId: String) extends Actor with Stash {
+class ShoppingCart(userId: String) extends Actor {
   import ShoppingCart._
   import akka.cluster.ddata.Replicator._
 
@@ -108,35 +107,21 @@ class ShoppingCart(userId: String) extends Actor with Stash {
     case cmd @ RemoveItem(productId) ⇒
       // Try to fetch latest from a majority of nodes first, since ORMap
       // remove must have seen the item to be able to remove it.
-      // Need to stash incoming commands, such as AddItem, to retain the
-      // order of the operations.
       replicator ! Get(DataKey, readMajority, Some(cmd))
 
-      context.become({
-        case GetSuccess(DataKey, Some(RemoveItem(productId))) ⇒
-          replicator ! Update(DataKey, LWWMap(), writeMajority, None) {
-            _ - productId
-          }
-          unstashAll()
-          context.unbecome()
+    case GetSuccess(DataKey, Some(RemoveItem(productId))) ⇒
+      replicator ! Update(DataKey, LWWMap(), writeMajority, None) {
+        _ - productId
+      }
 
-        case GetFailure(DataKey, Some(RemoveItem(productId))) ⇒
-          // ReadMajority failed, fall back to best effort local value
-          replicator ! Update(DataKey, LWWMap(), writeMajority, None) {
-            _ - productId
-          }
-          unstashAll()
-          context.unbecome()
+    case GetFailure(DataKey, Some(RemoveItem(productId))) ⇒
+      // ReadMajority failed, fall back to best effort local value
+      replicator ! Update(DataKey, LWWMap(), writeMajority, None) {
+        _ - productId
+      }
 
-        case NotFound(DataKey, Some(RemoveItem(productId))) ⇒
-          // nothing to remove
-          unstashAll()
-          context.unbecome()
-
-        case _ ⇒
-          stash()
-
-      }, discardOld = false)
+    case NotFound(DataKey, Some(RemoveItem(productId))) ⇒
+    // nothing to remove
   }
   //#remove-item
 
@@ -223,19 +208,6 @@ class ReplicatedShoppingCartSpec extends MultiNodeSpec(ReplicatedShoppingCartSpe
       enterBarrier("after-3")
     }
 
-    "read own updates" in within(5.seconds) {
-      runOn(node2) {
-        shoppingCart ! ShoppingCart.AddItem(LineItem("1", "Apples", quantity = 1))
-        // The stashing in the ShoppingCart actor is needed because of this scenario
-        shoppingCart ! ShoppingCart.RemoveItem("3")
-        shoppingCart ! ShoppingCart.AddItem(LineItem("3", "Bananas", quantity = 5))
-        shoppingCart ! ShoppingCart.GetCart
-        val cart = expectMsgType[Cart]
-        cart.items should be(Set(LineItem("1", "Apples", quantity = 8), LineItem("3", "Bananas", quantity = 5)))
-      }
-
-      enterBarrier("after-4")
-    }
   }
 
 }
