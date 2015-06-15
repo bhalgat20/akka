@@ -61,13 +61,16 @@ object ClusterSingletonProxySettings {
  * @param role The role of the cluster nodes where the singleton can be deployed. If None, then any node will do.
  * @param singletonIdentificationInterval Interval at which the proxy will try to resolve the singleton instance.
  * @param bufferSize If the location of the singleton is unknown the proxy will buffer this number of messages
- *   and deliver them when the singleton is identified. When the buffer is full new messages will be dropped.
- *   Use 0 to disable buffering, i.e. messages will be dropped immediately if the location of the singleton is unknown.
+ *   and deliver them when the singleton is identified. When the buffer is full old messages will be dropped
+ *   when new messages are sent viea the proxy. Use 0 to disable buffering, i.e. messages will be dropped
+ *   immediately if the location of the singleton is unknown.
  */
 final class ClusterSingletonProxySettings(
   val role: Option[String],
   val singletonIdentificationInterval: FiniteDuration,
   val bufferSize: Int) extends NoSerializationVerificationNeeded {
+
+  require(bufferSize >= 0 && bufferSize <= 10000, "bufferSize must be >= 0 and <= 10000")
 
   def withRole(role: String): ClusterSingletonProxySettings = copy(role = ClusterSingletonProxySettings.roleOption(role))
 
@@ -106,9 +109,10 @@ object ClusterSingletonProxy {
  * The proxy can be started on every node where the singleton needs to be reached and used as if it were the singleton
  * itself. It will then act as a router to the currently running singleton instance. If the singleton is not currently
  * available, e.g., during hand off or startup, the proxy will buffer the messages sent to the singleton and then deliver
- * them when the singleton is finally available. The size of the buffer is configurable.
+ * them when the singleton is finally available. The size of the buffer is configurable and it can be disabled by using
+ * a buffer size of 0. When the buffer is full old messages will be dropped when new messages are sent via the proxy.
  *
- * The proxy works by keeping track of the oldest cluster member. When a new oldest member is identified, e.g., because
+ * The proxy works by keeping track of the oldest cluster member. When a new oldest member is identified, e.g. because
  * the older one left the cluster, or at startup, the proxy will try to identify the singleton on the oldest member by
  * periodically sending an [[akka.actor.Identify]] message until the singleton responds with its
  * [[akka.actor.ActorIdentity]].
@@ -132,7 +136,7 @@ final class ClusterSingletonProxy(singletonPathString: String, settings: Cluster
   }
   var membersByAge: immutable.SortedSet[Member] = immutable.SortedSet.empty(ageOrdering)
 
-  var buffer = Vector.empty[(Any, ActorRef)]
+  var buffer = new java.util.LinkedList[(Any, ActorRef)]
 
   // subscribe to MemberEvent, re-subscribe when restart
   override def preStart(): Unit = {
@@ -248,19 +252,23 @@ final class ClusterSingletonProxy(singletonPathString: String, settings: Cluster
   }
 
   def buffer(msg: Any): Unit =
-    if (buffer.size == settings.bufferSize) {
-      log.debug("Singleton not available, buffer is full, dropping message type [{}]", msg.getClass.getName)
+    if (settings.bufferSize == 0)
+      log.debug("Singleton not available and buffering is disabled, dropping message [{}]", msg.getClass.getName)
+    else if (buffer.size == settings.bufferSize) {
+      val (m, _) = buffer.removeFirst()
+      log.debug("Singleton not available, buffer is full, dropping first message [{}]", m.getClass.getName)
+      buffer.addLast((msg, sender()))
     } else {
       log.debug("Singleton not available, buffering message type [{}]", msg.getClass.getName)
-      buffer :+= ((msg, sender()))
+      buffer.addLast((msg, sender()))
     }
 
   def sendBuffered(): Unit = {
     log.debug("Sending buffered messages to current singleton instance")
     val target = singleton.get
-    buffer.foreach {
-      case (msg, snd) ⇒ target.tell(msg, snd)
+    while (!buffer.isEmpty) {
+      val (msg, snd) = buffer.removeFirst()
+      target.tell(msg, snd)
     }
-    buffer = Vector.empty
   }
 }
