@@ -126,3 +126,5 @@ final class PNCounter private[akka] (
 
 }
 
+@SerialVersionUID(1L)
+final case class PNCounterKey(_id: String) extends Key[PNCounter](_id) with ReplicatedDataSerialization

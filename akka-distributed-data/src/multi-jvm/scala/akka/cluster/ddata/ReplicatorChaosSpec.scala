@@ -47,6 +47,14 @@ class ReplicatorChaosSpec extends MultiNodeSpec(ReplicatorChaosSpec) with STMult
     ReplicatorSettings(system).withRole("backend").withGossipInterval(1.second)), "replicator")
   val timeout = 3.seconds.dilated
 
+  val KeyA = GCounterKey("A")
+  val KeyB = PNCounterKey("B")
+  val KeyC = GCounterKey("C")
+  val KeyD = GCounterKey("D")
+  val KeyE = GSetKey[String]("E")
+  val KeyF = ORSetKey[String]("F")
+  val KeyX = GCounterKey("X")
+
   def join(from: RoleName, to: RoleName): Unit = {
     runOn(from) {
       cluster join node(to).address
@@ -54,21 +62,23 @@ class ReplicatorChaosSpec extends MultiNodeSpec(ReplicatorChaosSpec) with STMult
     enterBarrier(from.name + "-joined")
   }
 
-  def assertValue(key: String, expected: Any): Unit =
+  def assertValue(key: Key[ReplicatedData], expected: Any): Unit =
     within(10.seconds) {
       awaitAssert {
         replicator ! Get(key, ReadLocal)
         val value = expectMsgPF() {
-          case GetSuccess(`key`, c: GCounter, _)  ⇒ c.value
-          case GetSuccess(`key`, c: PNCounter, _) ⇒ c.value
-          case GetSuccess(`key`, c: GSet[_], _)   ⇒ c.elements
-          case GetSuccess(`key`, c: ORSet[_], _)  ⇒ c.elements
+          case g @ GetSuccess(`key`, _) ⇒ g.dataValue match {
+            case c: GCounter  ⇒ c.value
+            case c: PNCounter ⇒ c.value
+            case c: GSet[_]   ⇒ c.elements
+            case c: ORSet[_]  ⇒ c.elements
+          }
         }
         value should be(expected)
       }
     }
 
-  def assertDeleted(key: String): Unit =
+  def assertDeleted(key: Key[ReplicatedData]): Unit =
     within(5.seconds) {
       awaitAssert {
         replicator ! Get(key, ReadLocal)
@@ -94,54 +104,54 @@ class ReplicatorChaosSpec extends MultiNodeSpec(ReplicatorChaosSpec) with STMult
 
       runOn(first) {
         (0 until 5).foreach { i ⇒
-          replicator ! Update("A", GCounter(), WriteLocal)(_ + 1)
-          replicator ! Update("B", PNCounter(), WriteLocal)(_ - 1)
-          replicator ! Update("C", GCounter(), WriteAll(timeout))(_ + 1)
+          replicator ! Update(KeyA, GCounter(), WriteLocal)(_ + 1)
+          replicator ! Update(KeyB, PNCounter(), WriteLocal)(_ - 1)
+          replicator ! Update(KeyC, GCounter(), WriteAll(timeout))(_ + 1)
         }
-        receiveN(15).map(_.getClass).toSet should be(Set(classOf[UpdateSuccess]))
+        receiveN(15).map(_.getClass).toSet should be(Set(classOf[UpdateSuccess[_]]))
       }
 
       runOn(second) {
-        replicator ! Update("A", GCounter(), WriteLocal)(_ + 20)
-        replicator ! Update("B", PNCounter(), WriteTo(2, timeout))(_ + 20)
-        replicator ! Update("C", GCounter(), WriteAll(timeout))(_ + 20)
-        receiveN(3).toSet should be(Set(UpdateSuccess("A", None),
-          UpdateSuccess("B", None), UpdateSuccess("C", None)))
+        replicator ! Update(KeyA, GCounter(), WriteLocal)(_ + 20)
+        replicator ! Update(KeyB, PNCounter(), WriteTo(2, timeout))(_ + 20)
+        replicator ! Update(KeyC, GCounter(), WriteAll(timeout))(_ + 20)
+        receiveN(3).toSet should be(Set(UpdateSuccess(KeyA, None),
+          UpdateSuccess(KeyB, None), UpdateSuccess(KeyC, None)))
 
-        replicator ! Update("E", GSet(), WriteLocal)(_ + "e1" + "e2")
-        expectMsg(UpdateSuccess("E", None))
+        replicator ! Update(KeyE, GSet(), WriteLocal)(_ + "e1" + "e2")
+        expectMsg(UpdateSuccess(KeyE, None))
 
-        replicator ! Update("F", ORSet(), WriteLocal)(_ + "e1" + "e2")
-        expectMsg(UpdateSuccess("F", None))
+        replicator ! Update(KeyF, ORSet(), WriteLocal)(_ + "e1" + "e2")
+        expectMsg(UpdateSuccess(KeyF, None))
       }
 
       runOn(fourth) {
-        replicator ! Update("D", GCounter(), WriteLocal)(_ + 40)
-        expectMsg(UpdateSuccess("D", None))
+        replicator ! Update(KeyD, GCounter(), WriteLocal)(_ + 40)
+        expectMsg(UpdateSuccess(KeyD, None))
 
-        replicator ! Update("E", GSet(), WriteLocal)(_ + "e2" + "e3")
-        expectMsg(UpdateSuccess("E", None))
+        replicator ! Update(KeyE, GSet(), WriteLocal)(_ + "e2" + "e3")
+        expectMsg(UpdateSuccess(KeyE, None))
 
-        replicator ! Update("F", ORSet(), WriteLocal)(_ + "e2" + "e3")
-        expectMsg(UpdateSuccess("F", None))
+        replicator ! Update(KeyF, ORSet(), WriteLocal)(_ + "e2" + "e3")
+        expectMsg(UpdateSuccess(KeyF, None))
       }
 
       runOn(fifth) {
-        replicator ! Update("X", GCounter(), WriteTo(2, timeout))(_ + 50)
-        expectMsg(UpdateSuccess("X", None))
-        replicator ! Delete("X", WriteLocal)
-        expectMsg(DeleteSuccess("X"))
+        replicator ! Update(KeyX, GCounter(), WriteTo(2, timeout))(_ + 50)
+        expectMsg(UpdateSuccess(KeyX, None))
+        replicator ! Delete(KeyX, WriteLocal)
+        expectMsg(DeleteSuccess(KeyX))
       }
 
       enterBarrier("initial-updates-done")
 
-      assertValue("A", 25)
-      assertValue("B", 15)
-      assertValue("C", 25)
-      assertValue("D", 40)
-      assertValue("E", Set("e1", "e2", "e3"))
-      assertValue("F", Set("e1", "e2", "e3"))
-      assertDeleted("X")
+      assertValue(KeyA, 25)
+      assertValue(KeyB, 15)
+      assertValue(KeyC, 25)
+      assertValue(KeyD, 40)
+      assertValue(KeyE, Set("e1", "e2", "e3"))
+      assertValue(KeyF, Set("e1", "e2", "e3"))
+      assertDeleted(KeyX)
 
       enterBarrier("after-1")
     }
@@ -156,39 +166,39 @@ class ReplicatorChaosSpec extends MultiNodeSpec(ReplicatorChaosSpec) with STMult
       enterBarrier("split")
 
       runOn(first) {
-        replicator ! Update("A", GCounter(), WriteTo(2, timeout))(_ + 1)
-        expectMsg(UpdateSuccess("A", None))
+        replicator ! Update(KeyA, GCounter(), WriteTo(2, timeout))(_ + 1)
+        expectMsg(UpdateSuccess(KeyA, None))
       }
 
       runOn(third) {
-        replicator ! Update("A", GCounter(), WriteTo(2, timeout))(_ + 2)
-        expectMsg(UpdateSuccess("A", None))
+        replicator ! Update(KeyA, GCounter(), WriteTo(2, timeout))(_ + 2)
+        expectMsg(UpdateSuccess(KeyA, None))
 
-        replicator ! Update("E", GSet(), WriteTo(2, timeout))(_ + "e4")
-        expectMsg(UpdateSuccess("E", None))
+        replicator ! Update(KeyE, GSet(), WriteTo(2, timeout))(_ + "e4")
+        expectMsg(UpdateSuccess(KeyE, None))
 
-        replicator ! Update("F", ORSet(), WriteTo(2, timeout))(_ - "e2")
-        expectMsg(UpdateSuccess("F", None))
+        replicator ! Update(KeyF, ORSet(), WriteTo(2, timeout))(_ - "e2")
+        expectMsg(UpdateSuccess(KeyF, None))
       }
       runOn(fourth) {
-        replicator ! Update("D", GCounter(), WriteTo(2, timeout))(_ + 1)
-        expectMsg(UpdateSuccess("D", None))
+        replicator ! Update(KeyD, GCounter(), WriteTo(2, timeout))(_ + 1)
+        expectMsg(UpdateSuccess(KeyD, None))
       }
       enterBarrier("update-during-split")
 
       runOn(side1: _*) {
-        assertValue("A", 26)
-        assertValue("B", 15)
-        assertValue("D", 40)
-        assertValue("E", Set("e1", "e2", "e3"))
-        assertValue("F", Set("e1", "e2", "e3"))
+        assertValue(KeyA, 26)
+        assertValue(KeyB, 15)
+        assertValue(KeyD, 40)
+        assertValue(KeyE, Set("e1", "e2", "e3"))
+        assertValue(KeyF, Set("e1", "e2", "e3"))
       }
       runOn(side2: _*) {
-        assertValue("A", 27)
-        assertValue("B", 15)
-        assertValue("D", 41)
-        assertValue("E", Set("e1", "e2", "e3", "e4"))
-        assertValue("F", Set("e1", "e3"))
+        assertValue(KeyA, 27)
+        assertValue(KeyB, 15)
+        assertValue(KeyD, 41)
+        assertValue(KeyE, Set("e1", "e2", "e3", "e4"))
+        assertValue(KeyF, Set("e1", "e3"))
       }
       enterBarrier("update-during-split-verified")
 
@@ -208,13 +218,13 @@ class ReplicatorChaosSpec extends MultiNodeSpec(ReplicatorChaosSpec) with STMult
       }
       enterBarrier("split-repaired")
 
-      assertValue("A", 28)
-      assertValue("B", 15)
-      assertValue("C", 25)
-      assertValue("D", 41)
-      assertValue("E", Set("e1", "e2", "e3", "e4"))
-      assertValue("F", Set("e1", "e3"))
-      assertDeleted("X")
+      assertValue(KeyA, 28)
+      assertValue(KeyB, 15)
+      assertValue(KeyC, 25)
+      assertValue(KeyD, 41)
+      assertValue(KeyE, Set("e1", "e2", "e3", "e4"))
+      assertValue(KeyF, Set("e1", "e3"))
+      assertDeleted(KeyX)
 
       enterBarrier("after-3")
     }

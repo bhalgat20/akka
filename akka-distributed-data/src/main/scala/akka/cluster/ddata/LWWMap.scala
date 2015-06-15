@@ -146,3 +146,5 @@ final class LWWMap[A] private[akka] (
   override def hashCode: Int = underlying.hashCode
 }
 
+@SerialVersionUID(1L)
+final case class LWWMapKey[A](_id: String) extends Key[LWWMap[A]](_id) with ReplicatedDataSerialization

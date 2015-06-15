@@ -123,3 +123,5 @@ final class GCounter private[akka] (
 
 }
 
+@SerialVersionUID(1L)
+final case class GCounterKey(_id: String) extends Key[GCounter](_id) with ReplicatedDataSerialization

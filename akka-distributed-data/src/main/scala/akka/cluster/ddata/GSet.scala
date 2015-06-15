@@ -58,3 +58,5 @@ final case class GSet[A](elements: Set[A]) extends ReplicatedData with Replicate
   override def merge(that: GSet[A]): GSet[A] = copy(elements ++ that.elements)
 }
 
+@SerialVersionUID(1L)
+final case class GSetKey[A](_id: String) extends Key[GSet[A]](_id) with ReplicatedDataSerialization

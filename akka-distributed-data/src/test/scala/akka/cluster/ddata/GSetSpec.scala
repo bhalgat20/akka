@@ -107,9 +107,10 @@ class GSetSpec extends WordSpec with Matchers {
       val s2: GSet[String] = s1
       val GSet(elements1) = s1
       val elements2: Set[String] = elements1
-      Changed("key", s1) match {
-        case Changed("key", GSet(elements3)) ⇒
-          val elements4: Set[Any] = elements3
+      Changed(GSetKey[String]("key"))(s1) match {
+        case c @ Changed(GSetKey("key")) ⇒
+          val GSet(elements3) = c.dataValue
+          val elements4: Set[String] = elements3
           elements4 should be(Set("a", "b"))
       }
     }

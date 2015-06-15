@@ -7,7 +7,9 @@
 
 *Akka Distributed Data* is useful when you need to share data between nodes in an
 Akka Cluster. The data is accessed with an actor providing a key-value store like API.
-The keys are strings and the values are *Conflict Free Replicated Data Types* (CRDTs).
+The keys are unique identifiers with type information of the data values. The values 
+are *Conflict Free Replicated Data Types* (CRDTs).
+
 All data entries are spread to all nodes, or nodes with a certain role, in the cluster
 via direct replication and gossip based dissemination. You have fine grained control
 of the consistency level for reads and writes.
@@ -132,9 +134,6 @@ In the ``Get`` message you can pass an optional request context in the same way 
 to after receiving and transforming ``GetSuccess``.
 
 .. includecode:: code/docs/ddata/DistributedDataDocSpec.scala#get-request-context
-
-You can retrieve all keys of a local replica by sending ``Replicator.GetKeys`` message to the
-``Replicator``. The reply of ``GetKeys`` is a ``Replicator.GetKeysResult`` message.
 
 Consistency
 -----------

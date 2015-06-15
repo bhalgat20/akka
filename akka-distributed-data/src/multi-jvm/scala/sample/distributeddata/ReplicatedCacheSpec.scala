@@ -4,7 +4,6 @@
 package sample.datareplication
 
 import scala.concurrent.duration._
-
 import akka.actor.Actor
 import akka.actor.ActorRef
 import akka.actor.Props
@@ -19,6 +18,7 @@ import akka.remote.testkit.MultiNodeConfig
 import akka.remote.testkit.MultiNodeSpec
 import akka.testkit._
 import com.typesafe.config.ConfigFactory
+import akka.cluster.ddata.LWWMapKey
 
 object ReplicatedCacheSpec extends MultiNodeConfig {
   val node1 = role("node-1")
@@ -53,8 +53,8 @@ class ReplicatedCache() extends Actor {
   val replicator = DistributedData(context.system).replicator
   implicit val cluster = Cluster(context.system)
 
-  def dataKey(entryKey: String): String =
-    "cache-" + math.abs(entryKey.hashCode) % 100
+  def dataKey(entryKey: String): LWWMapKey[Any] =
+    LWWMapKey("cache-" + math.abs(entryKey.hashCode) % 100)
 
   def receive = {
     case PutInCache(key, value) ⇒
@@ -63,14 +63,16 @@ class ReplicatedCache() extends Actor {
       replicator ! Update(dataKey(key), LWWMap(), WriteLocal)(_ - key)
     case GetFromCache(key) ⇒
       replicator ! Get(dataKey(key), ReadLocal, Some(Request(key, sender())))
-    case GetSuccess(_, data: LWWMap[Any] @unchecked, Some(Request(key, replyTo))) ⇒
-      data.get(key) match {
-        case Some(value) ⇒ replyTo ! Cached(key, Some(value))
-        case None        ⇒ replyTo ! Cached(key, None)
+    case g @ GetSuccess(LWWMapKey(_), Some(Request(key, replyTo))) ⇒
+      g.dataValue match {
+        case data: LWWMap[_] ⇒ data.get(key) match {
+          case Some(value) ⇒ replyTo ! Cached(key, Some(value))
+          case None        ⇒ replyTo ! Cached(key, None)
+        }
       }
     case NotFound(_, Some(Request(key, replyTo))) ⇒
       replyTo ! Cached(key, None)
-    case _: UpdateResponse ⇒ // ok
+    case _: UpdateResponse[_] ⇒ // ok
   }
 
 }

@@ -37,3 +37,5 @@ final case class Flag(enabled: Boolean) extends ReplicatedData with ReplicatedDa
     else this
 }
 
+@SerialVersionUID(1L)
+final case class FlagKey(_id: String) extends Key[Flag](_id) with ReplicatedDataSerialization

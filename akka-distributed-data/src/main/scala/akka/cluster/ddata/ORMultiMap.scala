@@ -202,3 +202,6 @@ final class ORMultiMap[A] private[akka] (private[akka] val underlying: ORMap[ORS
 
   override def hashCode: Int = underlying.hashCode
 }
+
+@SerialVersionUID(1L)
+final case class ORMultiMapKey[A](_id: String) extends Key[ORMultiMap[A]](_id) with ReplicatedDataSerialization

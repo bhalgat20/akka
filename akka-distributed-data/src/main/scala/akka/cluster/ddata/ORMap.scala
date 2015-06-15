@@ -223,3 +223,5 @@ final class ORMap[A <: ReplicatedData] private[akka] (
 
 }
 
+@SerialVersionUID(1L)
+final case class ORMapKey[A <: ReplicatedData](_id: String) extends Key[ORMap[A]](_id) with ReplicatedDataSerialization

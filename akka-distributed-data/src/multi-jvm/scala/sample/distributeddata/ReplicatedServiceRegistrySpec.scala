@@ -4,7 +4,6 @@
 package sample.datareplication
 
 import scala.concurrent.duration._
-
 import akka.actor.Actor
 import akka.actor.ActorLogging
 import akka.actor.ActorRef
@@ -25,6 +24,9 @@ import akka.remote.testkit.MultiNodeConfig
 import akka.remote.testkit.MultiNodeSpec
 import akka.testkit._
 import com.typesafe.config.ConfigFactory
+import akka.cluster.ddata.GSetKey
+import akka.cluster.ddata.ORSetKey
+import akka.cluster.ddata.Key
 
 object ReplicatedServiceRegistrySpec extends MultiNodeConfig {
   val node1 = role("node-1")
@@ -70,7 +72,10 @@ object ReplicatedServiceRegistry {
    */
   final case class BindingChanged(name: String, services: Set[ActorRef])
 
-  private val KeysDataKey = "service-keys"
+  final case class ServiceKey(serviceName: String) extends Key[ORSet[ActorRef]](serviceName)
+
+  private val AllServicesKey = GSetKey[ServiceKey]("service-keys")
+
 }
 
 class ReplicatedServiceRegistry() extends Actor with ActorLogging {
@@ -80,15 +85,15 @@ class ReplicatedServiceRegistry() extends Actor with ActorLogging {
   val replicator = DistributedData(context.system).replicator
   implicit val cluster = Cluster(context.system)
 
-  var keys = Set.empty[String]
+  var keys = Set.empty[ServiceKey]
   var services = Map.empty[String, Set[ActorRef]]
   var leader = false
 
-  def dataKey(serviceName: String): String =
-    "service:" + serviceName
+  def serviceKey(serviceName: String): ServiceKey =
+    ServiceKey("service:" + serviceName)
 
   override def preStart(): Unit = {
-    replicator ! Subscribe(KeysDataKey, self)
+    replicator ! Subscribe(AllServicesKey, self)
     cluster.subscribe(self, ClusterEvent.InitialStateAsEvents, classOf[ClusterEvent.LeaderChanged])
   }
 
@@ -98,19 +103,19 @@ class ReplicatedServiceRegistry() extends Actor with ActorLogging {
 
   def receive = {
     case Register(name, service) ⇒
-      val dKey = dataKey(name)
+      val dKey = serviceKey(name)
       // store the service names in a separate GSet to be able to
       // get notifications of new names
       if (!keys(dKey))
-        replicator ! Update(KeysDataKey, GSet(), WriteLocal)(_ + dKey)
+        replicator ! Update(AllServicesKey, GSet(), WriteLocal)(_ + dKey)
       // add the service
       replicator ! Update(dKey, ORSet(), WriteLocal)(_ + service)
 
     case Lookup(key) ⇒
       sender() ! Bindings(key, services.getOrElse(key, Set.empty))
 
-    case Changed(KeysDataKey, data: GSet[String] @unchecked) ⇒
-      val newKeys = data.elements
+    case c @ Changed(AllServicesKey) ⇒
+      val newKeys = c.get(AllServicesKey).elements
       log.debug("Services changed, added: {}, all: {}", (newKeys -- keys), newKeys)
       (newKeys -- keys).foreach { dKey ⇒
         // subscribe to get notifications of when services with this name are added or removed
@@ -118,9 +123,9 @@ class ReplicatedServiceRegistry() extends Actor with ActorLogging {
       }
       keys = newKeys
 
-    case Changed(dKey, data: ORSet[ActorRef] @unchecked) ⇒
-      val name = dKey.split(":").tail.mkString
-      val newServices = data.elements
+    case c @ Changed(ServiceKey(serviceName)) ⇒
+      val name = serviceName.split(":").tail.mkString
+      val newServices = c.get(serviceKey(name)).elements
       log.debug("Services changed for name [{}]: {}", name, newServices)
       services = services.updated(name, newServices)
       context.system.eventStream.publish(BindingChanged(name, newServices))
@@ -146,10 +151,10 @@ class ReplicatedServiceRegistry() extends Actor with ActorLogging {
       val names = services.collect { case (name, refs) if refs.contains(ref) ⇒ name }
       names.foreach { name ⇒
         log.debug("Service with name [{}] terminated: {}", name, ref)
-        replicator ! Update(dataKey(name), ORSet(), WriteLocal)(_ - ref)
+        replicator ! Update(serviceKey(name), ORSet(), WriteLocal)(_ - ref)
       }
 
-    case _: UpdateResponse ⇒ // ok
+    case _: UpdateResponse[_] ⇒ // ok
   }
 
 }
@@ -202,23 +207,6 @@ class ReplicatedServiceRegistrySpec extends MultiNodeSpec(ReplicatedServiceRegis
       enterBarrier("after-2")
     }
 
-    "replicate many service entries" in within(10.seconds) {
-      for (i ← 100 until 200) {
-        val service = system.actorOf(Props[Service], name = myself.name + "_" + i)
-        registry ! Register("a" + i, service)
-      }
-
-      awaitAssert {
-        val probe = TestProbe()
-        for (i ← 100 until 200) {
-          registry.tell(Lookup("a" + i), probe.ref)
-          probe.expectMsgType[Bindings].services.map(_.path.name) should be(roles.map(_.name + "_" + i).toSet)
-        }
-      }
-
-      enterBarrier("after-3")
-    }
-
     "replicate updated service entry, and publish to even bus" in {
       val probe = TestProbe()
       system.eventStream.subscribe(probe.ref, classOf[BindingChanged])
@@ -254,6 +242,23 @@ class ReplicatedServiceRegistrySpec extends MultiNodeSpec(ReplicatedServiceRegis
       }
 
       enterBarrier("after-5")
+    }
+
+    "replicate many service entries" in within(10.seconds) {
+      for (i ← 100 until 200) {
+        val service = system.actorOf(Props[Service], name = myself.name + "_" + i)
+        registry ! Register("a" + i, service)
+      }
+
+      awaitAssert {
+        val probe = TestProbe()
+        for (i ← 100 until 200) {
+          registry.tell(Lookup("a" + i), probe.ref)
+          probe.expectMsgType[Bindings].services.map(_.path.name) should be(roles.map(_.name + "_" + i).toSet)
+        }
+      }
+
+      enterBarrier("after-6")
     }
 
   }

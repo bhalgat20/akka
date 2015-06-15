@@ -11,25 +11,15 @@ import scala.annotation.tailrec
 import scala.collection.JavaConverters._
 import scala.collection.breakOut
 import akka.actor.ExtendedActorSystem
-import akka.cluster.ddata.Flag
-import akka.cluster.ddata.GCounter
-import akka.cluster.ddata.GSet
-import akka.cluster.ddata.LWWMap
-import akka.cluster.ddata.LWWRegister
-import akka.cluster.ddata.ORMap
-import akka.cluster.ddata.ORMultiMap
-import akka.cluster.ddata.ORSet
-import akka.cluster.ddata.PNCounter
-import akka.cluster.ddata.PNCounterMap
-import akka.cluster.ddata.ReplicatedData
+import akka.cluster.ddata._
 import akka.cluster.ddata.Replicator._
 import akka.cluster.ddata.Replicator.Internal._
-import akka.cluster.ddata.VersionVector
 import akka.cluster.ddata.protobuf.msg.{ ReplicatedDataMessages ⇒ rd }
 import akka.cluster.ddata.protobuf.msg.{ ReplicatorMessages ⇒ dm }
 import akka.serialization.SerializerWithStringManifest
 import akka.serialization.BaseSerializer
 import com.google.protobuf.ByteString
+import akka.util.ByteString.UTF_8
 
 /**
  * Protobuf serializer of ReplicatedData.
@@ -39,15 +29,25 @@ class ReplicatedDataSerializer(val system: ExtendedActorSystem)
 
   private val DeletedDataManifest = "A"
   private val GSetManifest = "B"
+  private val GSetKeyManifest = "b"
   private val ORSetManifest = "C"
+  private val ORSetKeyManifest = "c"
   private val FlagManifest = "D"
+  private val FlagKeyManifest = "d"
   private val LWWRegisterManifest = "E"
+  private val LWWRegisterKeyManifest = "e"
   private val GCounterManifest = "F"
+  private val GCounterKeyManifest = "f"
   private val PNCounterManifest = "G"
+  private val PNCounterKeyManifest = "g"
   private val ORMapManifest = "H"
+  private val ORMapKeyManifest = "h"
   private val LWWMapManifest = "I"
+  private val LWWMapKeyManifest = "i"
   private val PNCounterMapManifest = "J"
+  private val PNCounterMapKeyManifest = "j"
   private val ORMultiMapManifest = "K"
+  private val ORMultiMapKeyManifest = "k"
   private val VersionVectorManifest = "L"
 
   private val fromBinaryMap = collection.immutable.HashMap[String, Array[Byte] ⇒ AnyRef](
@@ -62,21 +62,44 @@ class ReplicatedDataSerializer(val system: ExtendedActorSystem)
     PNCounterMapManifest -> pncountermapFromBinary,
     ORMultiMapManifest -> multimapFromBinary,
     DeletedDataManifest -> (_ ⇒ DeletedData),
-    VersionVectorManifest -> versionVectorFromBinary)
+    VersionVectorManifest -> versionVectorFromBinary,
+
+    GSetKeyManifest -> (bytes ⇒ GSetKey(keyIdFromBinary(bytes))),
+    ORSetKeyManifest -> (bytes ⇒ ORSetKey(keyIdFromBinary(bytes))),
+    FlagKeyManifest -> (bytes ⇒ FlagKey(keyIdFromBinary(bytes))),
+    LWWRegisterKeyManifest -> (bytes ⇒ LWWRegisterKey(keyIdFromBinary(bytes))),
+    GCounterKeyManifest -> (bytes ⇒ GCounterKey(keyIdFromBinary(bytes))),
+    PNCounterKeyManifest -> (bytes ⇒ PNCounterKey(keyIdFromBinary(bytes))),
+    ORMapKeyManifest -> (bytes ⇒ ORMapKey(keyIdFromBinary(bytes))),
+    LWWMapKeyManifest -> (bytes ⇒ LWWMapKey(keyIdFromBinary(bytes))),
+    PNCounterMapKeyManifest -> (bytes ⇒ PNCounterMapKey(keyIdFromBinary(bytes))),
+    ORMultiMapKeyManifest -> (bytes ⇒ ORMultiMapKey(keyIdFromBinary(bytes))))
 
   override def manifest(obj: AnyRef): String = obj match {
-    case _: ORSet[_]       ⇒ ORSetManifest
-    case _: GSet[_]        ⇒ GSetManifest
-    case _: GCounter       ⇒ GCounterManifest
-    case _: PNCounter      ⇒ PNCounterManifest
-    case _: Flag           ⇒ FlagManifest
-    case _: LWWRegister[_] ⇒ LWWRegisterManifest
-    case _: ORMap[_]       ⇒ ORMapManifest
-    case _: LWWMap[_]      ⇒ LWWMapManifest
-    case _: PNCounterMap   ⇒ PNCounterMapManifest
-    case _: ORMultiMap[_]  ⇒ ORMultiMapManifest
-    case DeletedData       ⇒ DeletedDataManifest
-    case _: VersionVector  ⇒ VersionVectorManifest
+    case _: ORSet[_]          ⇒ ORSetManifest
+    case _: GSet[_]           ⇒ GSetManifest
+    case _: GCounter          ⇒ GCounterManifest
+    case _: PNCounter         ⇒ PNCounterManifest
+    case _: Flag              ⇒ FlagManifest
+    case _: LWWRegister[_]    ⇒ LWWRegisterManifest
+    case _: ORMap[_]          ⇒ ORMapManifest
+    case _: LWWMap[_]         ⇒ LWWMapManifest
+    case _: PNCounterMap      ⇒ PNCounterMapManifest
+    case _: ORMultiMap[_]     ⇒ ORMultiMapManifest
+    case DeletedData          ⇒ DeletedDataManifest
+    case _: VersionVector     ⇒ VersionVectorManifest
+
+    case _: ORSetKey[_]       ⇒ ORSetKeyManifest
+    case _: GSetKey[_]        ⇒ GSetKeyManifest
+    case _: GCounterKey       ⇒ GCounterKeyManifest
+    case _: PNCounterKey      ⇒ PNCounterKeyManifest
+    case _: FlagKey           ⇒ FlagKeyManifest
+    case _: LWWRegisterKey[_] ⇒ LWWRegisterKeyManifest
+    case _: ORMapKey[_]       ⇒ ORMapKeyManifest
+    case _: LWWMapKey[_]      ⇒ LWWMapKeyManifest
+    case _: PNCounterMapKey   ⇒ PNCounterMapKeyManifest
+    case _: ORMultiMapKey[_]  ⇒ ORMultiMapKeyManifest
+
     case _ ⇒
       throw new IllegalArgumentException(s"Can't serialize object of type ${obj.getClass} in [${getClass.getName}]")
   }
@@ -94,6 +117,7 @@ class ReplicatedDataSerializer(val system: ExtendedActorSystem)
     case m: ORMultiMap[_]  ⇒ compress(multimapToProto(m))
     case DeletedData       ⇒ dm.Empty.getDefaultInstance.toByteArray
     case m: VersionVector  ⇒ versionVectorToProto(m).toByteArray
+    case Key(id)           ⇒ keyIdToBinary(id)
     case _ ⇒
       throw new IllegalArgumentException(s"Can't serialize object of type ${obj.getClass} in [${getClass.getName}]")
   }
@@ -373,6 +397,12 @@ class ReplicatedDataSerializer(val system: ExtendedActorSystem)
       keys = orsetFromProto(multimap.getKeys).asInstanceOf[ORSet[String]],
       entries))
   }
+
+  def keyIdToBinary(id: String): Array[Byte] =
+    id.getBytes(UTF_8)
+
+  def keyIdFromBinary(bytes: Array[Byte]): String =
+    new String(bytes, UTF_8)
 
 }
 

@@ -4,7 +4,6 @@
 package sample.datareplication
 
 import scala.concurrent.duration._
-
 import akka.actor.Actor
 import akka.actor.ActorRef
 import akka.actor.Props
@@ -20,6 +19,7 @@ import akka.remote.testkit.MultiNodeConfig
 import akka.remote.testkit.MultiNodeSpec
 import akka.testkit._
 import com.typesafe.config.ConfigFactory
+import akka.cluster.ddata.LWWMapKey
 
 object ReplicatedShoppingCartSpec extends MultiNodeConfig {
   val node1 = role("node-1")
@@ -61,7 +61,7 @@ class ShoppingCart(userId: String) extends Actor with Stash {
   val replicator = DistributedData(context.system).replicator
   implicit val cluster = Cluster(context.system)
 
-  val DataKey = "cart-" + userId
+  val DataKey = LWWMapKey[LineItem]("cart-" + userId)
 
   def receive = receiveGetCart
     .orElse[Any, Unit](receiveAddItem)
@@ -73,7 +73,8 @@ class ShoppingCart(userId: String) extends Actor with Stash {
     case GetCart ⇒
       replicator ! Get(DataKey, readMajority, Some(sender()))
 
-    case GetSuccess(DataKey, data: LWWMap[LineItem] @unchecked, Some(replyTo: ActorRef)) ⇒
+    case g @ GetSuccess(DataKey, Some(replyTo: ActorRef)) ⇒
+      val data = g.get(DataKey)
       val cart = Cart(data.entries.values.toSet)
       replyTo ! cart
 
@@ -112,7 +113,7 @@ class ShoppingCart(userId: String) extends Actor with Stash {
       replicator ! Get(DataKey, readMajority, Some(cmd))
 
       context.become({
-        case GetSuccess(DataKey, _, Some(RemoveItem(productId))) ⇒
+        case GetSuccess(DataKey, Some(RemoveItem(productId))) ⇒
           replicator ! Update(DataKey, LWWMap(), writeMajority, None) {
             _ - productId
           }
@@ -140,9 +141,9 @@ class ShoppingCart(userId: String) extends Actor with Stash {
   //#remove-item
 
   def receiveOther: Receive = {
-    case _: UpdateSuccess | _: UpdateTimeout ⇒
+    case _: UpdateSuccess[_] | _: UpdateTimeout[_] ⇒
     // UpdateTimeout, will eventually be replicated
-    case e: UpdateFailure                    ⇒ throw new IllegalStateException("Unexpected failure: " + e)
+    case e: UpdateFailure[_]                       ⇒ throw new IllegalStateException("Unexpected failure: " + e)
   }
 
   def updateCart(data: LWWMap[LineItem], item: LineItem): LWWMap[LineItem] =

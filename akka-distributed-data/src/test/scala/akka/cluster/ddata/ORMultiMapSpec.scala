@@ -112,9 +112,10 @@ class ORMultiMapSpec extends WordSpec with Matchers {
     val m2: ORMultiMap[Long] = m1
     val ORMultiMap(entries1) = m1
     val entries2: Map[String, Set[Long]] = entries1
-    Changed("key", m1) match {
-      case Changed("key", ORMultiMap(entries3)) ⇒
-        val entries4: Map[String, Set[Any]] = entries3
+    Changed(ORMultiMapKey[Long]("key"))(m1) match {
+      case c @ Changed(ORMultiMapKey("key")) ⇒
+        val ORMultiMap(entries3) = c.dataValue
+        val entries4: Map[String, Set[Long]] = entries3
         entries4 should be(Map("a" -> Set(1L, 2L), "b" -> Set(3L)))
     }
   }

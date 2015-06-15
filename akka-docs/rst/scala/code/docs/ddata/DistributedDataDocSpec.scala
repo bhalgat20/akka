@@ -8,21 +8,12 @@ import scala.concurrent.forkjoin.ThreadLocalRandom
 import akka.actor.Actor
 import akka.actor.ActorLogging
 import akka.cluster.Cluster
-import akka.cluster.ddata.DistributedData
-import akka.cluster.ddata.ORSet
-import akka.cluster.ddata.Replicator
+import akka.cluster.ddata._
 import akka.cluster.ddata.Replicator._
 import akka.testkit.AkkaSpec
 import akka.testkit.ImplicitSender
-import akka.cluster.ddata.PNCounter
-import akka.cluster.ddata.GSet
-import akka.cluster.ddata.Flag
 import akka.testkit.TestProbe
 import akka.actor.ActorRef
-import akka.cluster.ddata.PNCounterMap
-import akka.cluster.ddata.ORMultiMap
-import akka.cluster.ddata.LWWRegister
-import akka.cluster.ddata.ReplicatedData
 import akka.serialization.SerializationExtension
 
 object DistributedDataDocSpec {
@@ -34,6 +25,7 @@ object DistributedDataDocSpec {
   import akka.cluster.Cluster
   import akka.cluster.ddata.DistributedData
   import akka.cluster.ddata.ORSet
+  import akka.cluster.ddata.ORSetKey
   import akka.cluster.ddata.Replicator
   import akka.cluster.ddata.Replicator._
 
@@ -50,7 +42,9 @@ object DistributedDataDocSpec {
     import context.dispatcher
     val tickTask = context.system.scheduler.schedule(5.seconds, 5.seconds, self, Tick)
 
-    replicator ! Subscribe("key", self)
+    val DataKey = ORSetKey[String]("key")
+
+    replicator ! Subscribe(DataKey, self)
 
     def receive = {
       case Tick =>
@@ -58,17 +52,18 @@ object DistributedDataDocSpec {
         if (ThreadLocalRandom.current().nextBoolean()) {
           // add
           log.info("Adding: {}", s)
-          replicator ! Update("key", ORSet.empty[String], WriteLocal)(_ + s)
+          replicator ! Update(DataKey, ORSet.empty[String], WriteLocal)(_ + s)
         } else {
           // remove
           log.info("Removing: {}", s)
-          replicator ! Update("key", ORSet.empty[String], WriteLocal)(_ - s)
+          replicator ! Update(DataKey, ORSet.empty[String], WriteLocal)(_ - s)
         }
 
-      case _: UpdateResponse => // ignore
+      case _: UpdateResponse[_] => // ignore
 
-      case Changed("key", ORSet(elements)) =>
-        log.info("Current elements: {}", elements)
+      case c @ Changed(DataKey) =>
+        val data = c.get(DataKey)
+        log.info("Current elements: {}", data.elements)
     }
 
     override def postStop(): Unit = tickTask.cancel()
@@ -105,33 +100,38 @@ class DistributedDataDocSpec extends AkkaSpec("""
     implicit val cluster = Cluster(system)
     val replicator = DistributedData(system).replicator
 
-    replicator ! Update("counter1", PNCounter(), WriteLocal)(_ + 1)
+    val Counter1Key = PNCounterKey("counter1")
+    val Set1Key = GSetKey[String]("set1")
+    val Set2Key = ORSetKey[String]("set2")
+    val ActiveFlagKey = FlagKey("active")
+
+    replicator ! Update(Counter1Key, PNCounter(), WriteLocal)(_ + 1)
 
     val writeTo3 = WriteTo(n = 3, timeout = 1.second)
-    replicator ! Update("set1", GSet.empty[String], writeTo3)(_ + "hello")
+    replicator ! Update(Set1Key, GSet.empty[String], writeTo3)(_ + "hello")
 
     val writeMajority = WriteMajority(timeout = 5.seconds)
-    replicator ! Update("set2", ORSet.empty[String], writeMajority)(_ + "hello")
+    replicator ! Update(Set2Key, ORSet.empty[String], writeMajority)(_ + "hello")
 
     val writeAll = WriteAll(timeout = 5.seconds)
-    replicator ! Update("active", Flag.empty, writeAll)(_.switchOn)
+    replicator ! Update(ActiveFlagKey, Flag.empty, writeAll)(_.switchOn)
     //#update
 
-    probe.expectMsgType[UpdateResponse] match {
+    probe.expectMsgType[UpdateResponse[_]] match {
       //#update-response1
-      case UpdateSuccess("counter1", req) => // ok
+      case UpdateSuccess(Counter1Key, req) => // ok
       //#update-response1
-      case unexpected                     => fail("Unexpected response: " + unexpected)
+      case unexpected                      => fail("Unexpected response: " + unexpected)
     }
 
-    probe.expectMsgType[UpdateResponse] match {
+    probe.expectMsgType[UpdateResponse[_]] match {
       //#update-response2
-      case UpdateSuccess("set1", req)  => // ok
-      case UpdateTimeout("set1", req)  =>
+      case UpdateSuccess(Set1Key, req)  => // ok
+      case UpdateTimeout(Set1Key, req)  =>
       // write to 3 nodes failed within 1.second
       //#update-response2
-      case UpdateSuccess("set2", None) =>
-      case unexpected                  => fail("Unexpected response: " + unexpected)
+      case UpdateSuccess(Set2Key, None) =>
+      case unexpected                   => fail("Unexpected response: " + unexpected)
     }
   }
 
@@ -145,16 +145,17 @@ class DistributedDataDocSpec extends AkkaSpec("""
     implicit val cluster = Cluster(system)
     val replicator = DistributedData(system).replicator
     val writeTwo = WriteTo(n = 2, timeout = 3.second)
+    val Counter1Key = PNCounterKey("counter1")
 
     def receive: Receive = {
       case "increment" =>
         // incoming command to increase the counter
-        val upd = Update("counter1", PNCounter(), writeTwo, request = Some(sender()))(_ + 1)
+        val upd = Update(Counter1Key, PNCounter(), writeTwo, request = Some(sender()))(_ + 1)
         replicator ! upd
 
-      case UpdateSuccess("counter1", Some(replyTo: ActorRef)) =>
+      case UpdateSuccess(Counter1Key, Some(replyTo: ActorRef)) =>
         replyTo ! "ack"
-      case UpdateTimeout("counter1", Some(replyTo: ActorRef)) =>
+      case UpdateTimeout(Counter1Key, Some(replyTo: ActorRef)) =>
         replyTo ! "nack"
     }
     //#update-request-context
@@ -166,36 +167,43 @@ class DistributedDataDocSpec extends AkkaSpec("""
 
     //#get
     val replicator = DistributedData(system).replicator
+    val Counter1Key = PNCounterKey("counter1")
+    val Set1Key = GSetKey[String]("set1")
+    val Set2Key = ORSetKey[String]("set2")
+    val ActiveFlagKey = FlagKey("active")
 
-    replicator ! Get("counter1", ReadLocal)
+    replicator ! Get(Counter1Key, ReadLocal)
 
     val readFrom3 = ReadFrom(n = 3, timeout = 1.second)
-    replicator ! Get("set1", readFrom3)
+    replicator ! Get(Set1Key, readFrom3)
 
     val readMajority = ReadMajority(timeout = 5.seconds)
-    replicator ! Get("set2", readMajority)
+    replicator ! Get(Set2Key, readMajority)
 
     val readAll = ReadAll(timeout = 5.seconds)
-    replicator ! Get("active", readAll)
+    replicator ! Get(ActiveFlagKey, readAll)
     //#get
 
-    probe.expectMsgType[GetResponse] match {
+    probe.expectMsgType[GetResponse[_]] match {
       //#get-response1
-      case GetSuccess("counter1", PNCounter(value), req) => // ok
-      case NotFound("counter1", req)                     => // key counter1 does not exist
+      case g @ GetSuccess(Counter1Key, req) =>
+        val value = g.get(Counter1Key).value
+      case NotFound(Counter1Key, req) => // key counter1 does not exist
       //#get-response1
-      case unexpected                                    => fail("Unexpected response: " + unexpected)
+      case unexpected                 => fail("Unexpected response: " + unexpected)
     }
 
-    probe.expectMsgType[GetResponse] match {
+    probe.expectMsgType[GetResponse[_]] match {
       //#get-response2
-      case GetSuccess("set1", GSet(elements), req)   => // ok
-      case GetFailure("set1", req)                   =>
+      case g @ GetSuccess(Set1Key, req) =>
+        val elements = g.get(Set1Key).elements
+      case GetFailure(Set1Key, req) =>
       // read from 3 nodes failed within 1.second
-      case NotFound("set1", req)                     => // key set1 does not exist
+      case NotFound(Set1Key, req)   => // key set1 does not exist
       //#get-response2
-      case GetSuccess("set2", ORSet(elements), None) =>
-      case unexpected                                => fail("Unexpected response: " + unexpected)
+      case g @ GetSuccess(Set2Key, None) =>
+        val elements = g.get(Set2Key).elements
+      case unexpected => fail("Unexpected response: " + unexpected)
     }
   }
 
@@ -209,17 +217,19 @@ class DistributedDataDocSpec extends AkkaSpec("""
     implicit val cluster = Cluster(system)
     val replicator = DistributedData(system).replicator
     val readTwo = ReadFrom(n = 2, timeout = 3.second)
+    val Counter1Key = PNCounterKey("counter1")
 
     def receive: Receive = {
       case "get-count" =>
         // incoming request to retrieve current value of the counter
-        replicator ! Get("counter1", readTwo, request = Some(sender()))
+        replicator ! Get(Counter1Key, readTwo, request = Some(sender()))
 
-      case GetSuccess("counter1", PNCounter(value), Some(replyTo: ActorRef)) =>
+      case g @ GetSuccess(Counter1Key, Some(replyTo: ActorRef)) =>
+        val value = g.get(Counter1Key).value
         replyTo ! value
-      case GetFailure("counter1", Some(replyTo: ActorRef)) =>
+      case GetFailure(Counter1Key, Some(replyTo: ActorRef)) =>
         replyTo ! -1L
-      case NotFound("counter1", Some(replyTo: ActorRef)) =>
+      case NotFound(Counter1Key, Some(replyTo: ActorRef)) =>
         replyTo ! 0L
     }
     //#get-request-context
@@ -233,13 +243,14 @@ class DistributedDataDocSpec extends AkkaSpec("""
 
     //#subscribe
     val replicator = DistributedData(system).replicator
-    // subscribe to changes of the "counter1" value
-    replicator ! Subscribe("counter1", self)
+    val Counter1Key = PNCounterKey("counter1")
+    // subscribe to changes of the Counter1Key value
+    replicator ! Subscribe(Counter1Key, self)
     var currentValue = BigInt(0)
 
     def receive: Receive = {
-      case Changed("counter1", PNCounter(value)) =>
-        currentValue = value
+      case c @ Changed(Counter1Key) =>
+        currentValue = c.get(Counter1Key).value
       case "get-count" =>
         // incoming request to retrieve current value of the counter
         sender() ! currentValue
@@ -253,11 +264,13 @@ class DistributedDataDocSpec extends AkkaSpec("""
 
     //#delete
     val replicator = DistributedData(system).replicator
+    val Counter1Key = PNCounterKey("counter1")
+    val Set2Key = ORSetKey[String]("set2")
 
-    replicator ! Delete("counter1", WriteLocal)
+    replicator ! Delete(Counter1Key, WriteLocal)
 
     val writeMajority = WriteMajority(timeout = 5.seconds)
-    replicator ! Delete("set2", writeMajority)
+    replicator ! Delete(Set2Key, writeMajority)
     //#delete
   }
 

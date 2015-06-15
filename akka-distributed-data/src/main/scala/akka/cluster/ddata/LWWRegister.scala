@@ -170,3 +170,5 @@ final class LWWRegister[A] private[akka] (
 
 }
 
+@SerialVersionUID(1L)
+final case class LWWRegisterKey[A](_id: String) extends Key[LWWRegister[A]](_id) with ReplicatedDataSerialization

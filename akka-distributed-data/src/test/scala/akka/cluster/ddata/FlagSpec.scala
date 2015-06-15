@@ -34,8 +34,9 @@ class FlagSpec extends WordSpec with Matchers {
       val f1 = Flag.empty.switchOn
       val Flag(value1) = f1
       val value2: Boolean = value1
-      Changed("key", f1) match {
-        case Changed("key", Flag(value3)) ⇒
+      Changed(FlagKey("key"))(f1) match {
+        case c @ Changed(FlagKey("key")) ⇒
+          val Flag(value3) = c.dataValue
           val value4: Boolean = value3
           value4 should be(true)
       }

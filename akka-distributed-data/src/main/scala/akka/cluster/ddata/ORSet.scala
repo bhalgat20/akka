@@ -291,3 +291,5 @@ final class ORSet[A] private[akka] (
   }
 }
 
+@SerialVersionUID(1L)
+final case class ORSetKey[A](_id: String) extends Key[ORSet[A]](_id) with ReplicatedDataSerialization

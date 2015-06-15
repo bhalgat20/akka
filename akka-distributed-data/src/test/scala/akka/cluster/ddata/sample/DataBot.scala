@@ -14,6 +14,7 @@ import akka.cluster.ddata.DistributedData
 import akka.cluster.ddata.ORSet
 import com.typesafe.config.ConfigFactory
 import akka.cluster.ddata.Replicator
+import akka.cluster.ddata.ORSetKey
 
 object DataBot {
 
@@ -68,7 +69,9 @@ class DataBot extends Actor with ActorLogging {
   import context.dispatcher
   val tickTask = context.system.scheduler.schedule(5.seconds, 5.seconds, self, Tick)
 
-  replicator ! Subscribe("key", self)
+  val DataKey = ORSetKey[String]("key")
+
+  replicator ! Subscribe(DataKey, self)
 
   def receive = {
     case Tick ⇒
@@ -76,17 +79,17 @@ class DataBot extends Actor with ActorLogging {
       if (ThreadLocalRandom.current().nextBoolean()) {
         // add
         log.info("Adding: {}", s)
-        replicator ! Update("key", ORSet.empty[String], WriteLocal)(_ + s)
+        replicator ! Update(DataKey, ORSet.empty[String], WriteLocal)(_ + s)
       } else {
         // remove
         log.info("Removing: {}", s)
-        replicator ! Update("key", ORSet.empty[String], WriteLocal)(_ - s)
+        replicator ! Update(DataKey, ORSet.empty[String], WriteLocal)(_ - s)
       }
 
-    case _: UpdateResponse ⇒ // ignore
+    case _: UpdateResponse[_] ⇒ // ignore
 
-    case Changed("key", ORSet(elements)) ⇒
-      log.info("Current elements: {}", elements)
+    case c @ Changed(DataKey) ⇒
+      log.info("Current elements: {}", c.get(DataKey).elements)
   }
 
   override def postStop(): Unit = tickTask.cancel()

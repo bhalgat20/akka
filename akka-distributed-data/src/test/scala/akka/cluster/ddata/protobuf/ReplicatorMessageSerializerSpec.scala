@@ -12,6 +12,7 @@ import akka.actor.Address
 import akka.actor.ExtendedActorSystem
 import akka.actor.Props
 import akka.cluster.ddata.GSet
+import akka.cluster.ddata.GSetKey
 import akka.cluster.ddata.PruningState
 import akka.cluster.ddata.PruningState.PruningInitialized
 import akka.cluster.ddata.PruningState.PruningPerformed
@@ -34,6 +35,8 @@ class ReplicatorMessageSerializerSpec extends TestKit(ActorSystem("ReplicatorMes
   val address2 = UniqueAddress(Address("akka.tcp", system.name, "other.host.org", 4711), 2)
   val address3 = UniqueAddress(Address("akka.tcp", system.name, "some.host.org", 4712), 3)
 
+  val keyA = GSetKey[String]("A")
+
   override def afterAll {
     shutdown()
   }
@@ -48,17 +51,17 @@ class ReplicatorMessageSerializerSpec extends TestKit(ActorSystem("ReplicatorMes
 
     "serialize Replicator messages" in {
       val ref1 = system.actorOf(Props.empty, "ref1")
-      val data1 = GSet() + "a"
+      val data1 = GSet.empty[String] + "a"
 
-      checkSerialization(Get("A", ReadLocal))
-      checkSerialization(Get("A", ReadMajority(2.seconds), Some("x")))
-      checkSerialization(GetSuccess("A", data1, None))
-      checkSerialization(GetSuccess("A", data1, Some("x")))
-      checkSerialization(NotFound("A", Some("x")))
-      checkSerialization(GetFailure("A", Some("x")))
-      checkSerialization(Subscribe("A", ref1))
-      checkSerialization(Unsubscribe("A", ref1))
-      checkSerialization(Changed("A", data1))
+      checkSerialization(Get(keyA, ReadLocal))
+      checkSerialization(Get(keyA, ReadMajority(2.seconds), Some("x")))
+      checkSerialization(GetSuccess(keyA, None)(data1))
+      checkSerialization(GetSuccess(keyA, Some("x"))(data1))
+      checkSerialization(NotFound(keyA, Some("x")))
+      checkSerialization(GetFailure(keyA, Some("x")))
+      checkSerialization(Subscribe(keyA, ref1))
+      checkSerialization(Unsubscribe(keyA, ref1))
+      checkSerialization(Changed(keyA)(data1))
       checkSerialization(DataEnvelope(data1))
       checkSerialization(DataEnvelope(data1, pruning = Map(
         address1 -> PruningState(address2, PruningPerformed),

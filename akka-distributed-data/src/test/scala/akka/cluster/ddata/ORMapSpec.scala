@@ -193,8 +193,9 @@ class ORMapSpec extends WordSpec with Matchers {
       val m2: ORMap[Flag] = m1
       val ORMap(entries1) = m1
       val entries2: Map[String, Flag] = entries1
-      Changed("key", m1) match {
-        case Changed("key", ORMap(entries3)) ⇒
+      Changed(ORMapKey[Flag]("key"))(m1) match {
+        case c @ Changed(ORMapKey("key")) ⇒
+          val ORMap(entries3) = c.dataValue
           val entries4: Map[String, ReplicatedData] = entries3
           entries4 should be(Map("a" -> Flag(true), "b" -> Flag(false)))
       }

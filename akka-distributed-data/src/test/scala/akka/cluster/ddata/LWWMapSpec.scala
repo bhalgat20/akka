@@ -51,9 +51,10 @@ class LWWMapSpec extends WordSpec with Matchers {
       val m1 = LWWMap.empty.put(node1, "a", 1L, defaultClock[Long])
       val LWWMap(entries1) = m1
       val entries2: Map[String, Long] = entries1
-      Changed("key", m1) match {
-        case Changed("key", LWWMap(entries3)) ⇒
-          val entries4: Map[String, Any] = entries3
+      Changed(LWWMapKey[Long]("key"))(m1) match {
+        case c @ Changed(LWWMapKey("key")) ⇒
+          val LWWMap(entries3) = c.dataValue
+          val entries4: Map[String, Long] = entries3
           entries4 should be(Map("a" -> 1L))
       }
     }

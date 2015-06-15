@@ -141,3 +141,5 @@ final class PNCounterMap private[akka] (
   override def hashCode: Int = underlying.hashCode
 }
 
+@SerialVersionUID(1L)
+final case class PNCounterMapKey(_id: String) extends Key[PNCounterMap](_id) with ReplicatedDataSerialization

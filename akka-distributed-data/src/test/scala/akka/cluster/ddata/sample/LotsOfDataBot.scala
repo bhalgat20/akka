@@ -14,6 +14,7 @@ import akka.cluster.ddata.DistributedData
 import akka.cluster.ddata.ORSet
 import com.typesafe.config.ConfigFactory
 import akka.cluster.ddata.Replicator
+import akka.cluster.ddata.ORSetKey
 
 object LotsOfDataBot {
 
@@ -95,7 +96,7 @@ class LotsOfDataBot extends Actor with ActorLogging {
           tickTask.cancel()
           tickTask = context.system.scheduler.schedule(1.seconds, 1.seconds, self, Tick)
         }
-        val key = (count % maxEntries).toString
+        val key = ORSetKey[String]((count % maxEntries).toString)
         if (count <= 100)
           replicator ! Subscribe(key, self)
         val s = ThreadLocalRandom.current().nextInt(97, 123).toChar.toString
@@ -108,24 +109,26 @@ class LotsOfDataBot extends Actor with ActorLogging {
         }
       }
 
-    case _: UpdateResponse ⇒ // ignore
+    case _: UpdateResponse[_] ⇒ // ignore
 
-    case Changed(key, ORSet(elements)) ⇒
-      log.info("Current elements: {} -> {}", key, elements)
+    case c @ Changed(ORSetKey(id)) ⇒
+      val ORSet(elements) = c.dataValue
+      log.info("Current elements: {} -> {}", id, elements)
   }
 
   def passive: Receive = {
     case Tick ⇒
       if (!tickTask.isCancelled)
-        replicator ! GetKeys
-    case GetKeysResult(keys) ⇒
+        replicator ! GetKeyIds
+    case GetKeyIdsResult(keys) ⇒
       if (keys.size >= maxEntries) {
         tickTask.cancel()
         val duration = (System.nanoTime() - startTime).nanos.toMillis
         log.info("It took {} ms to replicate {} entries", duration, keys.size)
       }
-    case Changed(key, ORSet(elements)) ⇒
-      log.info("Current elements: {} -> {}", key, elements)
+    case c @ Changed(ORSetKey(id)) ⇒
+      val ORSet(elements) = c.dataValue
+      log.info("Current elements: {} -> {}", id, elements)
   }
 
   override def postStop(): Unit = tickTask.cancel()

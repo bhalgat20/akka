@@ -5,9 +5,7 @@ package sample.datareplication
 
 import java.lang.management.ManagementFactory
 import java.lang.management.MemoryMXBean
-
 import scala.concurrent.duration._
-
 import akka.actor.Actor
 import akka.actor.ActorLogging
 import akka.actor.Address
@@ -24,6 +22,7 @@ import akka.remote.testkit.MultiNodeConfig
 import akka.remote.testkit.MultiNodeSpec
 import akka.testkit._
 import com.typesafe.config.ConfigFactory
+import akka.cluster.ddata.LWWMapKey
 
 object ReplicatedMetricsSpec extends MultiNodeConfig {
   val node1 = role("node-1")
@@ -75,8 +74,11 @@ class ReplicatedMetrics(measureInterval: FiniteDuration, cleanupInterval: Finite
     self, Cleanup)(context.dispatcher)
   val memoryMBean: MemoryMXBean = ManagementFactory.getMemoryMXBean
 
-  replicator ! Subscribe("usedHeap", self)
-  replicator ! Subscribe("maxHeap", self)
+  val UsedHeapKey = LWWMapKey[Long]("usedHeap")
+  val MaxHeapKey = LWWMapKey[Long]("maxHeap")
+
+  replicator ! Subscribe(UsedHeapKey, self)
+  replicator ! Subscribe(MaxHeapKey, self)
 
   cluster.subscribe(self, InitialStateAsEvents, classOf[MemberUp], classOf[MemberRemoved])
 
@@ -94,26 +96,26 @@ class ReplicatedMetrics(measureInterval: FiniteDuration, cleanupInterval: Finite
       val heap = memoryMBean.getHeapMemoryUsage
       val used = heap.getUsed
       val max = heap.getMax
-      replicator ! Update("usedHeap", LWWMap.empty[Long], WriteLocal)(_ + (node -> used))
-      replicator ! Update("maxHeap", LWWMap.empty[Long], WriteLocal) { data ⇒
+      replicator ! Update(UsedHeapKey, LWWMap.empty[Long], WriteLocal)(_ + (node -> used))
+      replicator ! Update(MaxHeapKey, LWWMap.empty[Long], WriteLocal) { data ⇒
         data.get(node) match {
           case Some(`max`) ⇒ data // unchanged
           case _           ⇒ data + (node -> max)
         }
       }
 
-    case Changed("maxHeap", data: LWWMap[Long] @unchecked) ⇒
-      maxHeap = data.entries
+    case c @ Changed(MaxHeapKey) ⇒
+      maxHeap = c.get(MaxHeapKey).entries
 
-    case Changed("usedHeap", data: LWWMap[Long] @unchecked) ⇒
-      val usedHeapPercent = UsedHeap(data.entries.collect {
+    case c @ Changed(UsedHeapKey) ⇒
+      val usedHeapPercent = UsedHeap(c.get(UsedHeapKey).entries.collect {
         case (key, value) if maxHeap.contains(key) ⇒
           (key -> (value.toDouble / maxHeap(key)) * 100.0)
       })
       log.debug("Node {} observed:\n{}", node, usedHeapPercent)
       context.system.eventStream.publish(usedHeapPercent)
 
-    case _: UpdateResponse ⇒ // ok
+    case _: UpdateResponse[_] ⇒ // ok
 
     case MemberUp(m) ⇒
       nodesInCluster += nodeKey(m.address)
@@ -125,8 +127,8 @@ class ReplicatedMetrics(measureInterval: FiniteDuration, cleanupInterval: Finite
       def cleanupRemoved(data: LWWMap[Long]): LWWMap[Long] =
         (data.entries.keySet -- nodesInCluster).foldLeft(data) { case (d, key) ⇒ d - key }
 
-      replicator ! Update("usedHeap", LWWMap.empty[Long], WriteLocal)(cleanupRemoved)
-      replicator ! Update("maxHeap", LWWMap.empty[Long], WriteLocal)(cleanupRemoved)
+      replicator ! Update(UsedHeapKey, LWWMap.empty[Long], WriteLocal)(cleanupRemoved)
+      replicator ! Update(MaxHeapKey, LWWMap.empty[Long], WriteLocal)(cleanupRemoved)
   }
 
 }
