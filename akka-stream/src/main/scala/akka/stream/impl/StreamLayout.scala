@@ -4,7 +4,6 @@
 package akka.stream.impl
 
 import java.util.concurrent.atomic.{ AtomicInteger, AtomicBoolean, AtomicReference }
-
 import akka.stream.impl.StreamLayout.Module
 import akka.stream.scaladsl.Keep
 import akka.stream._
@@ -12,6 +11,7 @@ import org.reactivestreams.{ Processor, Subscription, Publisher, Subscriber }
 import scala.collection.mutable
 import scala.util.control.NonFatal
 import akka.event.Logging.simpleName
+import scala.annotation.tailrec
 
 /**
  * INTERNAL API
@@ -291,6 +291,51 @@ private[akka] object StreamLayout {
       """.stripMargin
 
   }
+}
+
+private[stream] object V {
+  sealed trait Termination
+  case object Allowed extends Termination
+  case object Completed extends Termination
+  case class Failed(ex: Throwable) extends Termination
+}
+
+private[stream] final class V[T] extends Processor[T, T] {
+  import V._
+  import ReactiveStreamsCompliance._
+
+  private val subscriptionStatus = new AtomicReference[AnyRef]
+  private val terminationStatus = new AtomicReference[Termination]
+
+  override def subscribe(s: Subscriber[_ >: T]): Unit =
+    if (subscriptionStatus.compareAndSet(null, s)) () // wait for onSubscribe
+    else {
+      val sub = subscriptionStatus.getAndSet(s).asInstanceOf[Subscription]
+      tryOnSubscribe(s, sub)
+      terminationStatus.getAndSet(Allowed) match {
+        case Completed  => tryOnComplete(s)
+        case Failed(ex) => tryOnError(s, ex)
+        case Allowed    => // all good
+      }
+    }
+
+  override def onSubscribe(s: Subscription): Unit =
+    if (subscriptionStatus.compareAndSet(null, s)) () // wait for Subscriber
+    else {
+      tryOnSubscribe(subscriptionStatus.get.asInstanceOf[Subscriber[T]], s)
+      terminationStatus.set(Allowed)
+    }
+
+  override def onError(t: Throwable): Unit =
+    if (terminationStatus.compareAndSet(null, Failed(t))) () // let it be picked up by subscribe()
+    else tryOnError(subscriptionStatus.get.asInstanceOf[Subscriber[T]], t)
+
+  override def onComplete(): Unit =
+    if (terminationStatus.compareAndSet(null, Completed)) () // let it be picked up by subscribe()
+    else tryOnComplete(subscriptionStatus.get.asInstanceOf[Subscriber[T]])
+
+  override def onNext(t: T): Unit =
+    tryOnNext(subscriptionStatus.get.asInstanceOf[Subscriber[T]], t)
 }
 
 private[stream] final class SubscriberSourceVirtualProcessor[T] extends Processor[T, T] {
